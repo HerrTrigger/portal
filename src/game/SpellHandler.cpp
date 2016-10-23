@@ -110,7 +110,7 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
 
     // only allow conjured consumable, bandage, poisons (all should have the 2^21 item flag set in DB)
     if (proto->Class == ITEM_CLASS_CONSUMABLE &&
-            !(proto->Flags & ITEM_FLAG_USEABLE_IN_ARENA) &&
+            !(proto->Flags & ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS) &&
             pUser->InArena())
     {
         recvPacket.rpos(recvPacket.wpos());                 // prevent spam at not read packet tail
@@ -429,7 +429,7 @@ void WorldSession::HandleCastSpellOpcode(WorldPacket& recvPacket)
 
     Spell* spell = new Spell(mover, spellInfo, triggeredByAura ? true : false, mover->GetObjectGuid(), triggeredByAura ? triggeredByAura->GetSpellProto() : nullptr);
     spell->m_cast_count = cast_count;                       // set count of casts
-    spell->prepare(&targets, triggeredByAura);
+    spell->SpellStart(&targets, triggeredByAura);
 }
 
 void WorldSession::HandleCancelCastOpcode(WorldPacket& recvPacket)
@@ -467,7 +467,12 @@ void WorldSession::HandleCancelAuraOpcode(WorldPacket& recvPacket)
     if (IsPassiveSpell(spellInfo))
         return;
 
-    if (!IsPositiveSpell(spellId))
+    SpellAuraHolder* holder = _player->GetSpellAuraHolder(spellId);
+
+    if (!holder)
+        return;
+
+    if (!IsPositiveSpell(spellId, holder->GetCaster(), _player))
     {
         // ignore for remote control state
         if (!_player->IsSelfMover())
@@ -500,8 +505,6 @@ void WorldSession::HandleCancelAuraOpcode(WorldPacket& recvPacket)
                 _player->InterruptSpell(CURRENT_CHANNELED_SPELL);
         return;
     }
-
-    SpellAuraHolder* holder = _player->GetSpellAuraHolder(spellId);
 
     // not own area auras can't be cancelled (note: maybe need to check for aura on holder and not general on spell)
     if (holder && holder->GetCasterGuid() != _player->GetObjectGuid() && HasAreaAuraEffect(holder->GetSpellProto()))

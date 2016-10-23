@@ -39,23 +39,24 @@ struct GameEventCreatureData;
 
 enum CreatureFlagsExtra
 {
-    CREATURE_FLAG_EXTRA_INSTANCE_BIND          = 0x00000001,       // creature kill bind instance with killer and killer's group
-    CREATURE_FLAG_EXTRA_CIVILIAN               = 0x00000002,       // not aggro (ignore faction/reputation hostility)
-    CREATURE_FLAG_EXTRA_NO_PARRY               = 0x00000004,       // creature can't parry
-    CREATURE_FLAG_EXTRA_NO_PARRY_HASTEN        = 0x00000008,       // creature can't counter-attack at parry
-    CREATURE_FLAG_EXTRA_NO_BLOCK               = 0x00000010,       // creature can't block
-    CREATURE_FLAG_EXTRA_NO_CRUSH               = 0x00000020,       // creature can't do crush attacks
-    CREATURE_FLAG_EXTRA_NO_XP_AT_KILL          = 0x00000040,       // creature kill not provide XP
-    CREATURE_FLAG_EXTRA_INVISIBLE              = 0x00000080,       // creature is always invisible for player (mostly trigger creatures)
-    CREATURE_FLAG_EXTRA_NOT_TAUNTABLE          = 0x00000100,       // creature is immune to taunt auras and effect attack me
-    CREATURE_FLAG_EXTRA_AGGRO_ZONE             = 0x00000200,       // creature sets itself in combat with zone on aggro
-    CREATURE_FLAG_EXTRA_GUARD                  = 0x00000400,       // creature is a guard
-    CREATURE_FLAG_EXTRA_NO_CALL_ASSIST         = 0x00000800,       // creature shouldn't call for assistance on aggro
-    CREATURE_FLAG_EXTRA_ACTIVE                 = 0x00001000,       // creature is active object. Grid of this creature will be loaded and creature set as active
-    CREATURE_FLAG_EXTRA_MMAP_FORCE_ENABLE      = 0x00002000,       // creature is forced to use MMaps
-    CREATURE_FLAG_EXTRA_MMAP_FORCE_DISABLE     = 0x00004000,       // creature is forced to NOT use MMaps
-    CREATURE_FLAG_EXTRA_WALK_IN_WATER          = 0x00008000,       // creature is forced to walk in water even it can swim
-    CREATURE_FLAG_EXTRA_HAVE_NO_SWIM_ANIMATION = 0x00010000,       // we have to not set "swim" animation or creature will have "no animation"
+    CREATURE_EXTRA_FLAG_INSTANCE_BIND          = 0x00000001,       // creature kill bind instance with killer and killer's group
+    CREATURE_EXTRA_FLAG_CIVILIAN               = 0x00000002,       // not aggro (ignore faction/reputation hostility)
+    CREATURE_EXTRA_FLAG_NO_PARRY               = 0x00000004,       // creature can't parry
+    CREATURE_EXTRA_FLAG_NO_PARRY_HASTEN        = 0x00000008,       // creature can't counter-attack at parry
+    CREATURE_EXTRA_FLAG_NO_BLOCK               = 0x00000010,       // creature can't block
+    CREATURE_EXTRA_FLAG_NO_CRUSH               = 0x00000020,       // creature can't do crush attacks
+    CREATURE_EXTRA_FLAG_NO_XP_AT_KILL          = 0x00000040,       // creature kill not provide XP
+    CREATURE_EXTRA_FLAG_INVISIBLE              = 0x00000080,       // creature is always invisible for player (mostly trigger creatures)
+    CREATURE_EXTRA_FLAG_NOT_TAUNTABLE          = 0x00000100,       // creature is immune to taunt auras and effect attack me
+    CREATURE_EXTRA_FLAG_AGGRO_ZONE             = 0x00000200,       // creature sets itself in combat with zone on aggro
+    CREATURE_EXTRA_FLAG_GUARD                  = 0x00000400,       // creature is a guard
+    CREATURE_EXTRA_FLAG_NO_CALL_ASSIST         = 0x00000800,       // creature shouldn't call for assistance on aggro
+    CREATURE_EXTRA_FLAG_ACTIVE                 = 0x00001000,       // creature is active object. Grid of this creature will be loaded and creature set as active
+    CREATURE_EXTRA_FLAG_MMAP_FORCE_ENABLE      = 0x00002000,       // creature is forced to use MMaps
+    CREATURE_EXTRA_FLAG_MMAP_FORCE_DISABLE     = 0x00004000,       // creature is forced to NOT use MMaps
+    CREATURE_EXTRA_FLAG_WALK_IN_WATER          = 0x00008000,       // creature is forced to walk in water even it can swim
+    CREATURE_EXTRA_FLAG_HAVE_NO_SWIM_ANIMATION = 0x00010000,       // we have to not set "swim" animation or creature will have "no animation"
+    CREATURE_EXTRA_FLAG_NO_MELEE               = 0x00020000,       // creature can't melee
 };
 
 // GCC have alternative #pragma pack(N) syntax and old gcc version not support pack(push,N), also any gcc version not support it at some platform
@@ -126,6 +127,7 @@ struct CreatureInfo
     uint32  KillCredit[MAX_KILL_CREDIT];
     uint32  QuestItems[6];
     uint32  MechanicImmuneMask;
+    uint32  SchoolImmuneMask;
     int32   ResistanceHoly;
     int32   ResistanceFire;
     int32   ResistanceNature;
@@ -317,6 +319,8 @@ enum AttackingTarget
     ATTACKING_TARGET_RANDOM = 0,                            // Just selects a random target
     ATTACKING_TARGET_TOPAGGRO,                              // Selects targes from top aggro to bottom
     ATTACKING_TARGET_BOTTOMAGGRO,                           // Selects targets from bottom aggro to top
+    ATTACKING_TARGET_NEAREST_BY,                            // Selects the nearest by target
+    ATTACKING_TARGET_FARTHEST_AWAY                          // Selects the farthest away target
 };
 
 enum SelectFlags
@@ -489,6 +493,8 @@ enum TemporaryFactionFlags                                  // Used at real fact
 class MANGOS_DLL_SPEC Creature : public Unit
 {
         CreatureAI* i_AI;
+        CreatureAI* m_pausedAI;                             // Main AI will be stored here during the possessing
+        CombatData* m_pausedCombatData;                     // Main Combat data will be stored here during possessing
 
     public:
 
@@ -497,6 +503,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
 
         void AddToWorld() override;
         void RemoveFromWorld() override;
+        virtual void CleanupsBeforeDelete() override;
 
         bool Create(uint32 guidlow, CreatureCreatePos& cPos, CreatureInfo const* cinfo, Team team = TEAM_NONE, const CreatureData* data = nullptr, GameEventCreatureData const* eventData = nullptr);
         bool LoadCreatureAddon(bool reload);
@@ -526,8 +533,8 @@ class MANGOS_DLL_SPEC Creature : public Unit
         bool IsDespawned() const { return getDeathState() ==  DEAD; }
         void SetCorpseDelay(uint32 delay) { m_corpseDelay = delay; }
         bool IsRacialLeader() const { return GetCreatureInfo()->RacialLeader; }
-        bool IsCivilian() const { return !!(GetCreatureInfo()->ExtraFlags & CREATURE_FLAG_EXTRA_CIVILIAN); }
-        bool IsGuard() const { return !!(GetCreatureInfo()->ExtraFlags & CREATURE_FLAG_EXTRA_GUARD); }
+        bool IsCivilian() const { return !!(GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_CIVILIAN); }
+        bool IsGuard() const { return !!(GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_GUARD); }
 
         bool CanWalk() const { return !!(GetCreatureInfo()->InhabitType & INHABIT_GROUND); }
         bool CanSwim() const { return !!(GetCreatureInfo()->InhabitType & INHABIT_WATER); }
@@ -542,6 +549,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
         void FillGuidsListFromThreatList(GuidVector& guids, uint32 maxamount = 0);
 
         bool IsImmuneToSpell(SpellEntry const* spellInfo, bool castOnSelf) override;
+        bool IsImmuneToDamage(SpellSchoolMask meleeSchoolMask) override;
         bool IsImmuneToSpellEffect(SpellEntry const* spellInfo, SpellEffectIndex index, bool castOnSelf) const override;
 
         bool IsElite() const
@@ -570,6 +578,8 @@ class MANGOS_DLL_SPEC Creature : public Unit
         bool AIM_Initialize();
 
         CreatureAI* AI() { return i_AI; }
+
+        void SetPossessed(bool isPossessed = true, Unit* owner = nullptr);
 
         void SetWalk(bool enable, bool asDefault = true);
         void SetLevitate(bool enable) override;
@@ -684,7 +694,7 @@ class MANGOS_DLL_SPEC Creature : public Unit
 
         bool IsVisibleInGridForPlayer(Player* pl) const override;
 
-        void RemoveCorpse();
+        void RemoveCorpse(bool inPlace = false);
         bool IsDeadByDefault() const { return m_isDeadByDefault; };
 
         void ForcedDespawn(uint32 timeMSToDespawn = 0);

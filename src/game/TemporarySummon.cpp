@@ -18,7 +18,7 @@
 
 #include "TemporarySummon.h"
 #include "Log.h"
-#include "CreatureAI.h"
+#include "AI/CreatureAI.h"
 
 TemporarySummon::TemporarySummon(ObjectGuid summoner) :
     Creature(CREATURE_SUBTYPE_TEMPORARY_SUMMON), m_type(TEMPSUMMON_TIMED_OOC_OR_CORPSE_DESPAWN), m_timer(0), m_lifetime(0), m_summoner(summoner), m_linkedToOwnerAura(0)
@@ -231,16 +231,22 @@ void TemporarySummon::UnSummon()
 {
     CombatStop();
 
+    if (m_linkedToOwnerAura & TEMPSUMMON_LINKED_AURA_REMOVE_OWNER)
+        RemoveAuraFromOwner();
+
     if (GetSummonerGuid().IsCreatureOrVehicle())
+    {
         if (Creature* sum = GetMap()->GetCreature(GetSummonerGuid()))
             if (sum->AI())
                 sum->AI()->SummonedCreatureDespawn(this);
+    }
+    else if (GetSummonerGuid().IsPlayer()) // if player that summoned this creature was MCing it, uncharm
+        if (Player* player = GetMap()->GetPlayer(GetSummonerGuid()))
+            if (player->GetMover() == this)
+                player->Uncharm();
 
     if (AI())
         AI()->SummonedCreatureDespawn(this);
-
-    if (m_linkedToOwnerAura & TEMPSUMMON_LINKED_AURA_REMOVE_OWNER)
-        RemoveAuraFromOwner();
 
     AddObjectToRemoveList();
 }
@@ -248,7 +254,6 @@ void TemporarySummon::UnSummon()
 void TemporarySummon::RemoveAuraFromOwner()
 {
     // creature is dead and we have to remove the charmer aura if exist
-    Unit* owner = GetOwner();
     uint32 const& spellId = GetUInt32Value(UNIT_CREATED_BY_SPELL);
     if (spellId)
     {

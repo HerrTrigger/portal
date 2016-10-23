@@ -538,7 +538,7 @@ void PlayerbotAI::AutoUpgradeEquipment() // test for autoequip
             }
         }
 
-        if (pItem->GetProto()->Flags & ITEM_FLAG_LOOTABLE && spellId == 0)
+        if (pItem->GetProto()->Flags & ITEM_FLAG_HAS_LOOT && spellId == 0)
         {
             // TODO: std::string oops = "Opening " + [ITEM] + " to see what's inside.";
             std::string oops = "Oh... Look! Theres something inside!!!";
@@ -4920,7 +4920,7 @@ void PlayerbotAI::UpdateAI(const uint32 /*p_time*/)
             m_bot->SetFacingTo(m_bot->GetAngle(pTarget));
             SpellCastTargets targets;
             targets.setUnitTarget(pTarget);
-            spell->prepare(&targets);
+            spell->SpellStart(&targets);
             SetIgnoreUpdateTime(10);
         }
 
@@ -4965,7 +4965,7 @@ void PlayerbotAI::UpdateAI(const uint32 /*p_time*/)
         else
         {
             SpellCastTargets targets;
-            spell->prepare(&targets);
+            spell->SpellStart(&targets);
             SetIgnoreUpdateTime(6);
         }
 
@@ -7455,7 +7455,7 @@ void PlayerbotAI::UseItem(Item *item, uint32 targetFlag, ObjectGuid targetGUID)
         }
     }
 
-    if (item->GetProto()->Flags & ITEM_FLAG_LOOTABLE && spellId == 0)
+    if (item->GetProto()->Flags & ITEM_FLAG_HAS_LOOT && spellId == 0)
     {
         // Open quest item in inventory, containing related items (e.g Gnarlpine necklace, containing Tallonkai's Jewel)
         WorldPacket* const packet = new WorldPacket(CMSG_OPEN_ITEM, 2);
@@ -8298,17 +8298,17 @@ void PlayerbotAI::Buy(Creature* vendor, const uint32 itemid)
                     continue;
 
                 // race wrong item skip always
-                if ((pProto->Flags2 & ITEM_FLAG2_HORDE_ONLY) && m_bot->GetTeam() != HORDE)
+                if ((pProto->Flags2 & ITEM_FLAG2_FACTION_HORDE) && m_bot->GetTeam() != HORDE)
                     continue;
 
-                if ((pProto->Flags2 & ITEM_FLAG2_ALLIANCE_ONLY) && m_bot->GetTeam() != ALLIANCE)
+                if ((pProto->Flags2 & ITEM_FLAG2_FACTION_ALLIANCE) && m_bot->GetTeam() != ALLIANCE)
                     continue;
 
                 if ((pProto->AllowableRace & m_bot->getRaceMask()) == 0)
                     continue;
 
                 // possible item coverting for BoA case
-                if (pProto->Flags & ITEM_FLAG_BOA)
+                if (pProto->Flags & ITEM_FLAG_IS_BOUND_TO_ACCOUNT)
                     // convert if can use and then buy
                     if (pProto->RequiredReputationFaction && uint32(m_bot->GetReputationRank(pProto->RequiredReputationFaction)) >= pProto->RequiredReputationRank)
                         // checked at convert data loading as existed
@@ -9858,7 +9858,7 @@ void PlayerbotAI::_HandleCommandProcess(std::string &text, Player &fromPlayer)
         m_itemTarget = reagent->GetProto()->ItemId;
         targets.setItemTarget(reagent);
         Spell *spell = new Spell(m_bot, spellInfo, false);
-        spell->prepare(&targets);
+        spell->SpellStart(&targets);
     }
 }
 
@@ -10185,7 +10185,7 @@ void PlayerbotAI::_HandleCommandEnchant(std::string &text, Player &fromPlayer)
             SpellCastTargets targets;
             targets.setItemTarget(iTarget);
             Spell *spell = new Spell(m_bot, spellInfo, false);
-            spell->prepare(&targets);
+            spell->SpellStart(&targets);
             SetState(BOTSTATE_DELAYED);
             SetIgnoreUpdateTime(1);
         }
@@ -10392,14 +10392,14 @@ void PlayerbotAI::_HandleCommandCraft(std::string &text, Player &fromPlayer)
             }
             else
             {
-                spell->prepare(&targets);
+                spell->SpellStart(&targets);
                 m_CraftSpellId = spellId;
                 SetState(BOTSTATE_DELAYED);
                 SetIgnoreUpdateTime(6);
             }
         }
         else
-            spell->prepare(&targets);
+            spell->SpellStart(&targets);
         return;
     }
 

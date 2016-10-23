@@ -262,7 +262,7 @@ void WorldSession::HandleDestroyItemOpcode(WorldPacket& recv_data)
     }
 
     // checked at client side and not have server side appropriate error output
-    if (pItem->GetProto()->Flags & ITEM_FLAG_INDESTRUCTIBLE)
+    if (pItem->GetProto()->Flags & ITEM_FLAG_NO_USER_DESTROY)
     {
         _player->SendEquipError(EQUIP_ERR_CANT_DROP_SOULBOUND, nullptr, nullptr);
         return;
@@ -499,10 +499,6 @@ void WorldSession::HandleSellItemOpcode(WorldPacket& recv_data)
         return;
     }
 
-    // remove fake death
-    if (GetPlayer()->hasUnitState(UNIT_STAT_DIED))
-        GetPlayer()->RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH);
-
     Item* pItem = _player->GetItemByGuid(itemGuid);
     if (pItem)
     {
@@ -604,10 +600,6 @@ void WorldSession::HandleBuybackItem(WorldPacket& recv_data)
         _player->SendSellError(SELL_ERR_CANT_FIND_VENDOR, nullptr, ObjectGuid(), 0);
         return;
     }
-
-    // remove fake death
-    if (GetPlayer()->hasUnitState(UNIT_STAT_DIED))
-        GetPlayer()->RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH);
 
     Item* pItem = _player->GetItemFromBuyBackSlot(slot);
     if (pItem)
@@ -725,10 +717,6 @@ void WorldSession::SendListInventory(ObjectGuid vendorguid)
         return;
     }
 
-    // remove fake death
-    if (GetPlayer()->hasUnitState(UNIT_STAT_DIED))
-        GetPlayer()->RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH);
-
     // Stop the npc if moving
     pCreature->StopMoving();
 
@@ -775,10 +763,10 @@ void WorldSession::SendListInventory(ObjectGuid vendorguid)
                         continue;
 
                     // race wrong item skip always
-                    if ((pProto->Flags2 & ITEM_FLAG2_HORDE_ONLY) && _player->GetTeam() != HORDE)
+                    if ((pProto->Flags2 & ITEM_FLAG2_FACTION_HORDE) && _player->GetTeam() != HORDE)
                         continue;
 
-                    if ((pProto->Flags2 & ITEM_FLAG2_ALLIANCE_ONLY) && _player->GetTeam() != ALLIANCE)
+                    if ((pProto->Flags2 & ITEM_FLAG2_FACTION_ALLIANCE) && _player->GetTeam() != ALLIANCE)
                         continue;
 
                     if ((pProto->AllowableRace & _player->getRaceMask()) == 0)
@@ -789,7 +777,7 @@ void WorldSession::SendListInventory(ObjectGuid vendorguid)
                 }
 
                 // possible item coverting for BoA case
-                if (pProto->Flags & ITEM_FLAG_BOA)
+                if (pProto->Flags & ITEM_FLAG_IS_BOUND_TO_ACCOUNT)
                 {
                     // convert if can use and then buy
                     if (pProto->RequiredReputationFaction && uint32(_player->GetReputationRank(pProto->RequiredReputationFaction)) >= pProto->RequiredReputationRank)
@@ -803,7 +791,7 @@ void WorldSession::SendListInventory(ObjectGuid vendorguid)
                 ++count;
 
                 // reputation discount
-                uint32 price = (crItem->ExtendedCost == 0 || pProto->Flags2 & ITEM_FLAG2_EXT_COST_REQUIRES_GOLD) ? uint32(floor(pProto->BuyPrice * discountMod)) : 0;
+                uint32 price = (crItem->ExtendedCost == 0 || pProto->Flags2 & ITEM_FLAG2_DONT_IGNORE_BUY_PRICE) ? uint32(floor(pProto->BuyPrice * discountMod)) : 0;
 
                 data << uint32(vendorslot + 1);             // client size expected counting from 1
                 data << uint32(pProto->ItemId);
@@ -1114,7 +1102,7 @@ void WorldSession::HandleWrapItemOpcode(WorldPacket& recv_data)
     }
 
     // cheating: non-wrapper wrapper (all empty wrappers is stackable)
-    if (!(gift->GetProto()->Flags & ITEM_FLAG_WRAPPER) || gift->GetMaxStackCount() == 1)
+    if (!(gift->GetProto()->Flags & ITEM_FLAG_IS_WRAPPER) || gift->GetMaxStackCount() == 1)
     {
         _player->SendEquipError(EQUIP_ERR_ITEM_NOT_FOUND, gift, nullptr);
         return;
@@ -1294,7 +1282,7 @@ void WorldSession::HandleSocketOpcode(WorldPacket& recv_data)
         ItemPrototype const* iGemProto = Gems[i]->GetProto();
 
         // unique item (for new and already placed bit removed enchantments
-        if (iGemProto->Flags & ITEM_FLAG_UNIQUE_EQUIPPED)
+        if (iGemProto->Flags & ITEM_FLAG_UNIQUE_EQUIPPABLE)
         {
             for (int j = 0; j < MAX_GEM_SOCKETS; ++j)
             {
@@ -1450,7 +1438,7 @@ void WorldSession::HandleItemRefundInfoRequest(WorldPacket& recv_data)
         return;
     }
 
-    if (!(item->GetProto()->Flags & ITEM_FLAG_REFUNDABLE))
+    if (!(item->GetProto()->Flags & ITEM_FLAG_ITEMPURCHASE_RECORD))
     {
         DEBUG_LOG("Item refund: item not refundable!");
         return;

@@ -538,7 +538,7 @@ class MANGOS_DLL_SPEC WorldObject : public Object
         float GetDistanceZ(const WorldObject* obj) const;
         bool IsInMap(const WorldObject* obj) const
         {
-            return IsInWorld() && obj->IsInWorld() && (GetMap() == obj->GetMap()) && InSamePhase(obj);
+            return obj && IsInWorld() && obj->IsInWorld() && (GetMap() == obj->GetMap()) && InSamePhase(obj);
         }
         bool IsWithinDist3d(float x, float y, float z, float dist2compare) const;
         bool IsWithinDist2d(float x, float y, float dist2compare) const;
@@ -568,6 +568,8 @@ class MANGOS_DLL_SPEC WorldObject : public Object
         bool isInBackInMap(WorldObject const* target, float distance, float arc = M_PI) const;
         bool isInFront(WorldObject const* target, float distance, float arc = M_PI) const;
         bool isInBack(WorldObject const* target, float distance, float arc = M_PI) const;
+        bool IsFacingTargetsBack(const WorldObject* target, float arc = M_PI_F) const;
+        bool IsFacingTargetsFront(const WorldObject* target, float arc = M_PI_F) const;
 
         virtual void CleanupsBeforeDelete();                // used in destructor or explicitly before mass creature delete to remove cross-references to already deleted units
 

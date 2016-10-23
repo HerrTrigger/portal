@@ -408,7 +408,7 @@ enum PlayerFlags
     PLAYER_FLAGS_GM                     = 0x00000008,
     PLAYER_FLAGS_GHOST                  = 0x00000010,
     PLAYER_FLAGS_RESTING                = 0x00000020,
-    PLAYER_FLAGS_UNK7                   = 0x00000040,       // admin?
+    PLAYER_FLAGS_SANCTUARY              = 0x00000040,
     PLAYER_FLAGS_UNK8                   = 0x00000080,       // pre-3.0.3 PLAYER_FLAGS_FFA_PVP flag for FFA PVP state
     PLAYER_FLAGS_CONTESTED_PVP          = 0x00000100,       // Player has been involved in a PvP combat and will be attacked by contested guards
     PLAYER_FLAGS_IN_PVP                 = 0x00000200,
@@ -1055,7 +1055,7 @@ class MANGOS_DLL_SPEC Player : public Unit
         void SendInstanceResetWarning(uint32 mapid, Difficulty difficulty, uint32 time);
 
         Creature* GetNPCIfCanInteractWith(ObjectGuid guid, uint32 npcflagmask);
-        GameObject* GetGameObjectIfCanInteractWith(ObjectGuid guid, uint32 gameobject_type = MAX_GAMEOBJECT_TYPE) const;
+        GameObject* GetGameObjectIfCanInteractWith(ObjectGuid guid, uint32 gameobject_type = MAX_GAMEOBJECT_TYPE);
 
         void ToggleAFK();
         void ToggleDND();
@@ -1130,6 +1130,11 @@ class MANGOS_DLL_SPEC Player : public Unit
         **/
         float ComputeRest(time_t timePassed, bool offline = false, bool inRestPlace = false);
 
+        /**
+        * \brief: player is interacting with something.
+        * \param: ObjectGuid interactObj > object that interact with this player
+        **/
+        void DoInteraction(ObjectGuid const& interactObjGuid);
         RestType GetRestType() const { return rest_type; }
         void SetRestType(RestType n_r_type, uint32 areaTriggerId = 0);
 
@@ -1429,6 +1434,7 @@ class MANGOS_DLL_SPEC Player : public Unit
         void SendQuestConfirmAccept(Quest const* pQuest, Player* pReceiver);
         void SendPushToPartyResponse(Player* pPlayer, uint32 msg);
         void SendQuestUpdateAddCreatureOrGo(Quest const* pQuest, ObjectGuid guid, uint32 creatureOrGO_idx, uint32 count);
+        void SendQuestGiverStatusMultiple();
 
         ObjectGuid GetDividerGuid() const { return m_dividerGuid; }
         void SetDividerGuid(ObjectGuid guid) { m_dividerGuid = guid; }
@@ -1955,6 +1961,7 @@ class MANGOS_DLL_SPEC Player : public Unit
         void ModifyHonorPoints(int32 value);
         void ModifyArenaPoints(int32 value);
 
+        uint8 GetHighestPvPRankIndex();
         uint32 GetMaxPersonalArenaRatingRequirement(uint32 minarenaslot);
 
         // End of PvP System
@@ -1964,6 +1971,7 @@ class MANGOS_DLL_SPEC Player : public Unit
         static DrunkenState GetDrunkenstateByValue(uint8 value);
 
         uint32 GetDeathTimer() const { return m_deathTimer; }
+        void ResetDeathTimer();
         uint32 GetCorpseReclaimDelay(bool pvp) const;
         void UpdateCorpseReclaimDelay();
         void SendCorpseReclaimDelay(bool load = false);
@@ -2181,10 +2189,12 @@ class MANGOS_DLL_SPEC Player : public Unit
         bool IsFreeFlying() const { return HasAuraType(SPELL_AURA_MOD_FLIGHT_SPEED_MOUNTED) || HasAuraType(SPELL_AURA_FLY); }
         bool CanStartFlyInArea(uint32 mapid, uint32 zone, uint32 area) const;
 
+        bool IsClientControl(Unit* target) const;
         void SetClientControl(Unit* target, uint8 allowMove);
         void SetMover(Unit* target) { m_mover = target ? target : this; }
         Unit* GetMover() const { return m_mover; }
         bool IsSelfMover() const { return m_mover == this; }// normal case for player not controlling other unit
+        void Uncharm() override;
 
         ObjectGuid const& GetFarSightGuid() const { return GetGuidValue(PLAYER_FARSIGHT); }
 
@@ -2246,6 +2256,7 @@ class MANGOS_DLL_SPEC Player : public Unit
         uint32 GetTemporaryUnsummonedPetNumber() const { return m_temporaryUnsummonedPetNumber; }
         void SetTemporaryUnsummonedPetNumber(uint32 petnumber) { m_temporaryUnsummonedPetNumber = petnumber; }
         void UnsummonPetTemporaryIfAny();
+        void UnsummonPetIfAny();
         void ResummonPetTemporaryUnSummonedIfAny();
         bool IsPetNeedBeTemporaryUnsummoned() const { return !IsInWorld() || !isAlive() || IsMounted() /*+in flight*/; }
 
@@ -2294,6 +2305,7 @@ class MANGOS_DLL_SPEC Player : public Unit
         void SetAuraUpdateMask(uint8 slot) { m_auraUpdateMask |= (uint64(1) << slot); }
         Player* GetNextRandomRaidMember(float radius);
         PartyResult CanUninviteFromGroup() const;
+        void UpdateGroupLeaderFlag(const bool remove = false);
         // BattleGround Group System
         void SetBattleGroundRaid(Group* group, int8 subgroup = -1);
         void RemoveFromBattleGroundRaid();

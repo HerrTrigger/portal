@@ -24,7 +24,7 @@ CREATE TABLE `db_version` (
   `version` varchar(120) DEFAULT NULL,
   `creature_ai_version` varchar(120) DEFAULT NULL,
   `cache_id` int(10) DEFAULT '0',
-  `required_12939_01_mangos_spell_template` bit(1) DEFAULT NULL
+  `required_12941_01_mangos_event_linkedto` bit(1) DEFAULT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8 ROW_FORMAT=DYNAMIC COMMENT='Used DB version notes';
 
 --
@@ -1355,6 +1355,7 @@ CREATE TABLE `creature_template` (
   `QuestItem5` int(11) unsigned NOT NULL DEFAULT '0',
   `QuestItem6` int(11) unsigned NOT NULL DEFAULT '0',
   `MechanicImmuneMask` int(10) unsigned NOT NULL DEFAULT '0',
+  `SchoolImmuneMask` int(10) unsigned NOT NULL DEFAULT '0',
   `ResistanceHoly` smallint(5) NOT NULL DEFAULT '0',
   `ResistanceFire` smallint(5) NOT NULL DEFAULT '0',
   `ResistanceNature` smallint(5) NOT NULL DEFAULT '0',
@@ -1385,7 +1386,7 @@ CREATE TABLE `creature_template` (
 LOCK TABLES `creature_template` WRITE;
 /*!40000 ALTER TABLE `creature_template` DISABLE KEYS */;
 INSERT INTO `creature_template` VALUES
-(1,'Waypoint (Only GM can see it)','Visual',NULL,1,1,0,0,0,10045,0,0,0,35,35,1,0,8,7,1,0,0,4096,0,130,5242886,0.91,1.14286,8,0,-1,1,1,1,1,1,1,64,64,0,0,2,3,1,2,5,10,100,2000,2200,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'','');
+(1,'Waypoint (Only GM can see it)','Visual',NULL,1,1,0,0,0,10045,0,0,0,35,35,1,0,8,7,1,0,0,4096,0,130,5242886,0.91,1.14286,8,0,-1,1,1,1,1,1,1,64,64,0,0,2,3,1,2,5,10,100,2000,2200,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'','');
 /*!40000 ALTER TABLE `creature_template` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -1717,6 +1718,7 @@ CREATE TABLE `game_event` (
   `occurence` bigint(20) unsigned NOT NULL DEFAULT '86400' COMMENT 'Delay in minutes between occurences of the event',
   `length` bigint(20) unsigned NOT NULL DEFAULT '43200' COMMENT 'Length in minutes of the event',
   `holiday` mediumint(8) unsigned NOT NULL DEFAULT '0' COMMENT 'Client side holiday id',
+  `linkedTo` mediumint(8) unsigned NOT NULL DEFAULT '0' COMMENT 'This event starts only if defined LinkedTo event is started',
   `description` varchar(255) DEFAULT NULL COMMENT 'Description of the event displayed in console',
   PRIMARY KEY (`entry`)
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8;

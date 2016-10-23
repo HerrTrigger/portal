@@ -33,8 +33,8 @@
 #include "Log.h"
 #include "LootMgr.h"
 #include "MapManager.h"
-#include "CreatureAI.h"
-#include "CreatureAISelector.h"
+#include "AI/CreatureAI.h"
+#include "AI/CreatureAISelector.h"
 #include "InstanceData.h"
 #include "MapPersistentStateMgr.h"
 #include "BattleGround/BattleGroundMgr.h"
@@ -130,7 +130,7 @@ bool CreatureCreatePos::Relocate(Creature* cr) const
 }
 
 Creature::Creature(CreatureSubtype subtype) : Unit(),
-    i_AI(nullptr),
+    i_AI(nullptr), m_pausedAI(nullptr), m_pausedCombatData(nullptr),
     m_lootMoney(0), m_lootGroupRecipientId(0),
     m_lootStatus(CREATURE_LOOT_STATUS_NONE),
     m_corpseDecayTimer(0), m_respawnTime(0), m_respawnDelay(25), m_corpseDelay(60), m_aggroDelay(0), m_respawnradius(5.0f),
@@ -155,11 +155,6 @@ Creature::Creature(CreatureSubtype subtype) : Unit(),
 Creature::~Creature()
 {
     CleanupsBeforeDelete();
-
-    m_vendorItemCounts.clear();
-
-    delete i_AI;
-    i_AI = nullptr;
 }
 
 void Creature::AddToWorld()
@@ -171,7 +166,7 @@ void Creature::AddToWorld()
     Unit::AddToWorld();
 
     // Make active if required
-    if (sWorld.isForceLoadMap(GetMapId()) || (GetCreatureInfo()->ExtraFlags & CREATURE_FLAG_EXTRA_ACTIVE))
+    if (sWorld.isForceLoadMap(GetMapId()) || (GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_ACTIVE))
         SetActiveObjectState(true);
 }
 
@@ -184,14 +179,28 @@ void Creature::RemoveFromWorld()
     Unit::RemoveFromWorld();
 }
 
-void Creature::RemoveCorpse()
+void Creature::CleanupsBeforeDelete()
 {
-    // since pool system can fail to roll unspawned object, this one can remain spawned, so must set respawn nevertheless
-    if (uint16 poolid = sPoolMgr.IsPartOfAPool<Creature>(GetGUIDLow()))
-        sPoolMgr.UpdatePool<Creature>(*GetMap()->GetPersistentState(), poolid, GetGUIDLow());
+    delete i_AI;
+    delete m_pausedAI;
+    delete m_pausedCombatData;
+    i_AI = nullptr;
+    m_pausedAI = nullptr;
+    m_pausedCombatData = nullptr;
+    Unit::CleanupsBeforeDelete();
+    m_vendorItemCounts.clear();
+}
 
-    if (!IsInWorld())                                       // can be despawned by update pool
-        return;
+void Creature::RemoveCorpse(bool inPlace)
+{
+    if (!inPlace)
+    {
+        // since pool system can fail to roll unspawned object, this one can remain spawned, so must set respawn nevertheless
+        if (uint16 poolid = sPoolMgr.IsPartOfAPool<Creature>(GetGUIDLow()))
+            sPoolMgr.UpdatePool<Creature>(*GetMap()->GetPersistentState(), poolid, GetGUIDLow());
+        if (!IsInWorld())                            // can be despawned by update pool
+            return;
+    }
 
     if ((getDeathState() != CORPSE && !m_isDeadByDefault) || (getDeathState() != ALIVE && m_isDeadByDefault))
         return;
@@ -345,7 +354,7 @@ bool Creature::InitEntry(uint32 Entry, CreatureData const* data /*=nullptr*/, Ga
 
     // check if we need to add swimming movement. TODO: i thing movement flags should be computed automatically at each movement of creature so we need a sort of UpdateMovementFlags() method
     if (cinfo->InhabitType & INHABIT_WATER &&               // check inhabit type water
-            !(cinfo->ExtraFlags & CREATURE_FLAG_EXTRA_WALK_IN_WATER) &&  // check if creature is forced to walk (crabs, giant,...)
+            !(cinfo->ExtraFlags & CREATURE_EXTRA_FLAG_WALK_IN_WATER) &&  // check if creature is forced to walk (crabs, giant,...)
             data &&                                         // check if there is data to get creature spawn pos
             GetMap()->GetTerrain()->IsSwimmable(data->posX, data->posY, data->posZ, minfo->bounding_radius))  // check if creature is in water and have enough space to swim
         m_movementInfo.AddMovementFlag(MOVEFLAG_SWIMMING);  // add swimming movement
@@ -392,7 +401,7 @@ bool Creature::UpdateEntry(uint32 Entry, Team team, const CreatureData* data /*=
     if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IN_COMBAT))
         unitFlags |= UNIT_FLAG_IN_COMBAT;
 
-    if (m_movementInfo.HasMovementFlag(MOVEFLAG_SWIMMING) && (GetCreatureInfo()->ExtraFlags & CREATURE_FLAG_EXTRA_HAVE_NO_SWIM_ANIMATION) == 0)
+    if (m_movementInfo.HasMovementFlag(MOVEFLAG_SWIMMING) && (GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_HAVE_NO_SWIM_ANIMATION) == 0)
         unitFlags |= UNIT_FLAG_UNK_15;
     else
         unitFlags &= ~UNIT_FLAG_UNK_15;
@@ -450,30 +459,39 @@ uint32 Creature::ChooseDisplayId(const CreatureInfo* cinfo, const CreatureData* 
     if (data && data->modelid_override)
         return data->modelid_override;
 
-    // use defaults from the template model id 1
-    uint32 display_id = cinfo->ModelId[0];
+    // use defaults from the template
+    uint32 display_id = 0;
 
     // models may be categorized as (in this order):
     // if mod4 && mod3 && mod2 && mod1  use any, by 25%-chance (other gender is selected and replaced after this function)
-    // if mod3 && mod2 && mod1          use mod1 unless mod3 has modelid_alt_model (then all by 33%-chance)
-    // if mod2                          use mod1 unless mod2 has modelid_alt_model (then both by 50%-chance)
+    // if mod3 && mod2 && mod1          use mod3 unless mod2 has modelid_alt_model (then all by 33%-chance)
+    // if mod2                          use mod2 unless mod2 has modelid_alt_model (then both by 50%-chance)
     // if mod1                          use mod1
 
+    // The follow decision tree needs to be updated if MAX_CREATURE_MODEL is changed.
+    static_assert(MAX_CREATURE_MODEL == 4, "Need to update model selection code for new or removed model fields");
+
     // model selected here may be replaced with other_gender using own function
-    // We use this to eliminate invisible models vs. "dummy" models (infernals, etc).
-    // Where it's expected to select one of two, model must have a alternative model defined (alternative model is normally the same as defined in ModelId1).
-    // Same pattern is used in the above model selection, but the result may be ModelId3 and not ModelId2 as here.
-    if (sObjectMgr.GetCreatureModelAlternativeModel(display_id))
+    if (cinfo->ModelId[3] && cinfo->ModelId[2] && cinfo->ModelId[1] && cinfo->ModelId[0])
     {
-        uint32 alternativeId = 0;
-        for (uint32 i = 1; i < MAX_CREATURE_MODEL - 1; ++i)
-        {
-            if (cinfo->ModelId[i])
-                ++alternativeId;
-            else
-                break;
-        }
-        display_id = cinfo->ModelId[urand(0, alternativeId)];
+        display_id = cinfo->ModelId[urand(0, 3)];
+    }
+    else if (cinfo->ModelId[2] && cinfo->ModelId[1] && cinfo->ModelId[0])
+    {
+        uint32 modelid_tmp = sObjectMgr.GetCreatureModelAlternativeModel(cinfo->ModelId[1]);
+        display_id = modelid_tmp ? cinfo->ModelId[urand(0, 2)] : cinfo->ModelId[2];
+    }
+    else if (cinfo->ModelId[1])
+    {
+        // We use this to eliminate invisible models vs. "dummy" models (infernals, etc).
+        // Where it's expected to select one of two, model must have a alternative model defined (alternative model is normally the same as defined in ModelId1).
+        // Same pattern is used in the above model selection, but the result may be ModelId3 and not ModelId2 as here.
+        uint32 modelid_tmp = sObjectMgr.GetCreatureModelAlternativeModel(cinfo->ModelId[1]);
+        display_id = modelid_tmp ? cinfo->ModelId[urand(0, 1)] : cinfo->ModelId[1];
+    }
+    else if (cinfo->ModelId[0])
+    {
+        display_id = cinfo->ModelId[0];
     }
 
     // fail safe, we use creature entry 1 and make error
@@ -550,19 +568,17 @@ void Creature::Update(uint32 update_diff, uint32 diff)
         case CORPSE:
         {
             Unit::Update(update_diff, diff);
+
             if (loot)
                 loot->Update();
 
-            if (m_isDeadByDefault)
-                break;
-
-            if (m_corpseDecayTimer <= update_diff)
+            if (!m_isDeadByDefault)
             {
-                RemoveCorpse();
-                break;
+                if (m_corpseDecayTimer <= update_diff)
+                    RemoveCorpse();
+                else
+                    m_corpseDecayTimer -= update_diff;
             }
-            else
-                m_corpseDecayTimer -= update_diff;
 
             break;
         }
@@ -586,27 +602,24 @@ void Creature::Update(uint32 update_diff, uint32 diff)
 
             Unit::Update(update_diff, diff);
 
-            // creature can be dead after Unit::Update call
-            // CORPSE/DEAD state will processed at next tick (in other case death timer will be updated unexpectedly)
-            if (!isAlive())
-                break;
-
-            if (!IsInEvadeMode())
+            // Creature can be dead after unit update
+            if (isAlive())
             {
-                if (AI())
+                if (!IsInEvadeMode() && AI())
                 {
                     // do not allow the AI to be changed during update
                     m_AI_locked = true;
                     AI()->UpdateAI(diff);   // AI not react good at real update delays (while freeze in non-active part of map)
                     m_AI_locked = false;
+
+                    // Creature can be dead after ai update
+                    if (!isAlive())
+                        return;
                 }
+
+                RegenerateAll(update_diff);
             }
 
-            // creature can be dead after UpdateAI call
-            // CORPSE/DEAD state will processed at next tick (in other case death timer will be updated unexpectedly)
-            if (!isAlive())
-                break;
-            RegenerateAll(update_diff);
             break;
         }
         default:
@@ -766,7 +779,91 @@ bool Creature::AIM_Initialize()
     i_motionMaster.Initialize();
     i_AI = FactorySelector::selectAI(this);
     delete oldAI;
+
+    // Handle Spawned Events, also calls Reset()
+    i_AI->JustRespawned();
     return true;
+}
+
+void Creature::SetPossessed(bool isPossessed /*= true*/, Unit* owner /*= nullptr*/)
+{
+    float totalThreat = 0.0f;                               // total threat generated by the possessed (will be transfered to the owner)
+
+    FactionTemplateEntry const* factionEntry = getFactionTemplateEntry();
+
+    if (isPossessed)
+    {
+        if (!m_pausedAI && (i_AI && i_AI->IsControllable()))
+        {
+            m_pausedAI = i_AI;
+            i_AI = FactorySelector::GetPossessAI(this);
+        }
+
+        m_pausedCombatData = m_combatData;
+        m_combatData = new CombatData(this);
+
+        // stop any generated movement TODO:: this may not be correct! what about possessing a feared creature?
+        GetMotionMaster()->Clear();
+        GetMotionMaster()->MoveIdle();
+        StopMoving(true);
+    }
+    else
+    {
+        if (m_pausedAI)
+        {
+            delete i_AI;
+            i_AI = m_pausedAI;
+            m_pausedAI = nullptr;
+        }
+
+        // first find friendly target (stopping combat here is not recommended because m_attackers will be modified)
+        AttackerSet friendlyTargets;
+        for (Unit::AttackerSet::const_iterator itr =  getAttackers().begin(); itr != getAttackers().end(); ++itr)
+        {
+            Unit* attacker = (*itr);
+            if (attacker->GetTypeId() != TYPEID_UNIT)
+                continue;
+
+            if (!factionEntry->IsHostileTo(*attacker->getFactionTemplateEntry()))
+                friendlyTargets.insert(attacker);
+        }
+
+        // now stop attackers combat and transfer threat generated from this to owner, also get the total generated threat
+        for (Unit::AttackerSet::iterator itr = friendlyTargets.begin(); itr != friendlyTargets.end(); ++itr)
+        {
+            Unit* attacker = (*itr);
+            attacker->AttackStop(true, true);
+            attacker->m_Events.KillAllEvents(true);
+            attacker->getThreatManager().modifyThreatPercent(this, -101);           // only remove the possessed creature from threat list because it can be filled by other players
+            attacker->AddThreat(owner);
+        }
+
+        AttackStop(true, true);
+        m_Events.KillAllEvents(true);
+
+        // now we can remove the whole threat list and restore the one right before the possess
+        delete m_combatData;
+        m_combatData = m_pausedCombatData;
+        m_pausedCombatData = nullptr;
+
+        // we have to restore initial MotionMaster
+        GetMotionMaster()->Initialize();
+
+        if (isAlive())
+        {
+            SetCombatStartPosition(GetPositionX(), GetPositionY(), GetPositionZ()); // needed for creature not yet entered in combat or SelectHostileTarget() will fail
+
+            // check if its own pet
+            if (IsPet() && GetOwner() == owner)
+                return;
+
+            // TODO:: iam not sure we need that faction check
+            if (factionEntry->IsHostileTo(*owner->getFactionTemplateEntry()))
+                getThreatManager().addThreat(owner, GetMaxHealth());                // generating threat by max life amount best way i found to make it realistic
+        }
+        else
+            m_combatData->threatManager.clearReferences();
+    }
 }
 
 bool Creature::Create(uint32 guidlow, CreatureCreatePos& cPos, CreatureInfo const* cinfo, Team team /*= TEAM_NONE*/, const CreatureData* data /*= nullptr*/, GameEventCreatureData const* eventData /*= nullptr*/)
@@ -782,8 +879,10 @@ bool Creature::Create(uint32 guidlow, CreatureCreatePos& cPos, CreatureInfo cons
     if (!cPos.Relocate(this))
         return false;
 
-    // Notify the outdoor pvp script
-    if (OutdoorPvP* outdoorPvP = sOutdoorPvPMgr.GetScript(GetZoneId()))
+    // Notify the pvp script
+    if (GetMap()->IsBattleGroundOrArena())
+        ((BattleGroundMap*)GetMap())->GetBG()->HandleCreatureCreate(this);
+    else if (OutdoorPvP* outdoorPvP = sOutdoorPvPMgr.GetScript(GetZoneId()))
         outdoorPvP->HandleCreatureCreate(this);
 
     // Notify the map's instance data.
@@ -1688,7 +1787,7 @@ void Creature::ForcedDespawn(uint32 timeMSToDespawn)
     if (isAlive())
         SetDeathState(JUST_DIED);
 
-    RemoveCorpse();
+    RemoveCorpse(true);                                     // force corpse removal in the same grid
 
     SetHealth(0);                                           // just for nice GM-mode view
 }
@@ -1698,10 +1797,24 @@ bool Creature::IsImmuneToSpell(SpellEntry const* spellInfo, bool castOnSelf)
     if (!spellInfo)
         return false;
 
-    if (!castOnSelf && GetCreatureInfo()->MechanicImmuneMask & (1 << (spellInfo->Mechanic - 1)))
-        return true;
+    if (!castOnSelf)
+    {
+        if (GetCreatureInfo()->MechanicImmuneMask & (1 << (spellInfo->Mechanic - 1)))
+            return true;
+        
+        if (GetCreatureInfo()->SchoolImmuneMask & spellInfo->SchoolMask)
+            return true;
+    }
 
     return Unit::IsImmuneToSpell(spellInfo, castOnSelf);
+}
+
+bool Creature::IsImmuneToDamage(SpellSchoolMask meleeSchoolMask)
+{
+    if (GetCreatureInfo()->SchoolImmuneMask & meleeSchoolMask)
+        return true;
+
+    return Unit::IsImmuneToDamage(meleeSchoolMask);
 }
 
 bool Creature::IsImmuneToSpellEffect(SpellEntry const* spellInfo, SpellEffectIndex index, bool castOnSelf) const
@@ -1710,7 +1823,7 @@ bool Creature::IsImmuneToSpellEffect(SpellEntry const* spellInfo, SpellEffectInd
         return true;
 
     // Taunt immunity special flag check
-    if (GetCreatureInfo()->ExtraFlags & CREATURE_FLAG_EXTRA_NOT_TAUNTABLE)
+    if (GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_NOT_TAUNTABLE)
     {
         // Taunt aura apply check
         if (spellInfo->Effect[index] == SPELL_EFFECT_APPLY_AURA)
@@ -1833,11 +1946,11 @@ bool Creature::IsVisibleInGridForPlayer(Player* pl) const
     if (pl->isGameMaster())
         return true;
 
-    if (GetCreatureInfo()->ExtraFlags & CREATURE_FLAG_EXTRA_INVISIBLE)
+    if (GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_INVISIBLE)
         return false;
 
     // Live player (or with not release body see live creatures or death creatures with corpse disappearing time > 0
-    if (pl->isAlive() || pl->GetDeathTimer() > 0)
+    if (pl->isAlive() || !pl->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
     {
         return (isAlive() || m_corpseDecayTimer > 0 || (m_isDeadByDefault && m_deathState == CORPSE));
     }
@@ -1881,7 +1994,7 @@ void Creature::CallAssistance()
     {
         SetNoCallAssistance(true);
 
-        if (GetCreatureInfo()->ExtraFlags & CREATURE_FLAG_EXTRA_NO_CALL_ASSIST)
+        if (GetCreatureInfo()->ExtraFlags & CREATURE_EXTRA_FLAG_NO_CALL_ASSIST)
             return;
 
         AI()->SendAIEventAround(AI_EVENT_CALL_ASSISTANCE, getVictim(), sWorld.getConfig(CONFIG_UINT32_CREATURE_FAMILY_ASSISTANCE_DELAY), sWorld.getConfig(CONFIG_FLOAT_CREATURE_FAMILY_ASSISTANCE_RADIUS));
@@ -2000,8 +2113,9 @@ bool Creature::IsOutOfThreatArea(Unit* pVictim) const
 
 CreatureDataAddon const* Creature::GetCreatureAddon() const
 {
-    if (CreatureDataAddon const* addon = ObjectMgr::GetCreatureAddon(GetGUIDLow()))
-        return addon;
+    if (!(GetObjectGuid().GetHigh() == HIGHGUID_PET)) // pets have guidlow that is conflicting with normal guidlows hence GetGUIDLow() gives wrong info
+        if (CreatureDataAddon const* addon = ObjectMgr::GetCreatureAddon(GetGUIDLow()))
+            return addon;
 
     // dependent from difficulty mode entry
     if (GetEntry() != GetCreatureInfo()->Entry)
@@ -2128,25 +2242,28 @@ void Creature::SetInCombatWithZone()
 
 bool Creature::MeetsSelectAttackingRequirement(Unit* pTarget, SpellEntry const* pSpellInfo, uint32 selectFlags) const
 {
-    if (selectFlags & SELECT_FLAG_PLAYER && pTarget->GetTypeId() != TYPEID_PLAYER)
-        return false;
+    if (selectFlags)
+    {
+        if (selectFlags & SELECT_FLAG_PLAYER && pTarget->GetTypeId() != TYPEID_PLAYER)
+            return false;
 
-    if (selectFlags & SELECT_FLAG_POWER_MANA && pTarget->GetPowerType() != POWER_MANA)
-        return false;
-    else if (selectFlags & SELECT_FLAG_POWER_RAGE && pTarget->GetPowerType() != POWER_RAGE)
-        return false;
-    else if (selectFlags & SELECT_FLAG_POWER_ENERGY && pTarget->GetPowerType() != POWER_ENERGY)
-        return false;
-    else if (selectFlags & SELECT_FLAG_POWER_RUNIC && pTarget->GetPowerType() != POWER_RUNIC_POWER)
-        return false;
+        if (selectFlags & SELECT_FLAG_POWER_MANA && pTarget->GetPowerType() != POWER_MANA)
+            return false;
+        else if (selectFlags & SELECT_FLAG_POWER_RAGE && pTarget->GetPowerType() != POWER_RAGE)
+            return false;
+        else if (selectFlags & SELECT_FLAG_POWER_ENERGY && pTarget->GetPowerType() != POWER_ENERGY)
+            return false;
+        else if (selectFlags & SELECT_FLAG_POWER_RUNIC && pTarget->GetPowerType() != POWER_RUNIC_POWER)
+            return false;
 
-    if (selectFlags & SELECT_FLAG_IN_MELEE_RANGE && !CanReachWithMeleeAttack(pTarget))
-        return false;
-    if (selectFlags & SELECT_FLAG_NOT_IN_MELEE_RANGE && CanReachWithMeleeAttack(pTarget))
-        return false;
+        if (selectFlags & SELECT_FLAG_IN_MELEE_RANGE && !CanReachWithMeleeAttack(pTarget))
+            return false;
+        else if (selectFlags & SELECT_FLAG_NOT_IN_MELEE_RANGE && CanReachWithMeleeAttack(pTarget))
+            return false;
 
-    if (selectFlags & SELECT_FLAG_IN_LOS && !IsWithinLOSInMap(pTarget))
-        return false;
+        if (selectFlags & SELECT_FLAG_IN_LOS && !IsWithinLOSInMap(pTarget))
+            return false;
+    }
 
     if (pSpellInfo)
     {
@@ -2190,13 +2307,19 @@ Unit* Creature::SelectAttackingTarget(AttackingTarget target, uint32 position, S
     {
         case ATTACKING_TARGET_RANDOM:
         {
+            Unit* pTarget = nullptr;
             std::vector<Unit*> suitableUnits;
             suitableUnits.reserve(threatlist.size() - position);
+
             advance(itr, position);
-            for (; itr != threatlist.end(); ++itr)
-                if (Unit* pTarget = GetMap()->GetUnit((*itr)->getUnitGuid()))
-                    if (!selectFlags || MeetsSelectAttackingRequirement(pTarget, pSpellInfo, selectFlags))
-                        suitableUnits.push_back(pTarget);
+            while (itr != threatlist.end())
+            {
+                pTarget = GetMap()->GetUnit((*itr)->getUnitGuid());
+                if (pTarget && MeetsSelectAttackingRequirement(pTarget, pSpellInfo, selectFlags))
+                    suitableUnits.push_back(pTarget);
+
+                ++itr;
+            }
 
             if (!suitableUnits.empty())
                 return suitableUnits[urand(0, suitableUnits.size() - 1)];
@@ -2205,23 +2328,75 @@ Unit* Creature::SelectAttackingTarget(AttackingTarget target, uint32 position, S
         }
         case ATTACKING_TARGET_TOPAGGRO:
         {
+            Unit* pTarget = nullptr;
+
             advance(itr, position);
-            for (; itr != threatlist.end(); ++itr)
-                if (Unit* pTarget = GetMap()->GetUnit((*itr)->getUnitGuid()))
-                    if (!selectFlags || MeetsSelectAttackingRequirement(pTarget, pSpellInfo, selectFlags))
-                        return pTarget;
+            while (itr != threatlist.end())
+            {
+                pTarget = GetMap()->GetUnit((*itr)->getUnitGuid());
+                if (pTarget && MeetsSelectAttackingRequirement(pTarget, pSpellInfo, selectFlags))
+                    return pTarget;
+
+                ++itr;
+            }
 
             break;
         }
         case ATTACKING_TARGET_BOTTOMAGGRO:
         {
+            Unit* pTarget = nullptr;
+
             advance(ritr, position);
-            for (; ritr != threatlist.rend(); ++ritr)
-                if (Unit* pTarget = GetMap()->GetUnit((*itr)->getUnitGuid()))
-                    if (!selectFlags || MeetsSelectAttackingRequirement(pTarget, pSpellInfo, selectFlags))
-                        return pTarget;
+            while (ritr != threatlist.rend())
+            {
+                pTarget = GetMap()->GetUnit((*itr)->getUnitGuid());
+                if (pTarget && MeetsSelectAttackingRequirement(pTarget, pSpellInfo, selectFlags))
+                    return pTarget;
+
+                ++ritr;
+            }
 
             break;
+        }
+        case ATTACKING_TARGET_NEAREST_BY:
+        case ATTACKING_TARGET_FARTHEST_AWAY:
+        {
+            float distance = -1;
+            float combatDistance = 0;
+            Unit* pTarget = nullptr;
+            Unit* suitableTarget = nullptr;
+
+            advance(itr, position);
+            while (itr != threatlist.end())
+            {
+                pTarget = GetMap()->GetUnit((*itr)->getUnitGuid());
+
+                if (pTarget && MeetsSelectAttackingRequirement(pTarget, pSpellInfo, selectFlags))
+                {
+                    combatDistance = Creature::GetCombatDistance(pTarget, false);
+
+                    if (target == ATTACKING_TARGET_NEAREST_BY)
+                    {
+                        if (!suitableTarget || combatDistance < distance)
+                        {
+                            distance = combatDistance;
+                            suitableTarget = pTarget;
+                        }
+                    }
+                    else // FARTHEST
+                    {
+                        if (combatDistance > distance)
+                        {
+                            distance = combatDistance;
+                            suitableTarget = pTarget;
+                        }
+                    }
+                }
+
+                ++itr;
+            }
+
+            return suitableTarget;
         }
     }
 
@@ -2617,15 +2792,6 @@ void Creature::SetWalk(bool enable, bool asDefault)
 
 void Creature::SetLevitate(bool enable)
 {
-    if (Unit* unit = GetCharmer())
-    {
-        if (unit->GetTypeId() == TYPEID_PLAYER)
-        {
-            static_cast<Player*>(unit)->SetLevitate(enable);
-            return;
-        }
-    }
-
     if (enable)
         m_movementInfo.AddMovementFlag(MOVEFLAG_LEVITATING);
     else
@@ -2638,15 +2804,6 @@ void Creature::SetLevitate(bool enable)
 
 void Creature::SetSwim(bool enable)
 {
-    if (Unit* unit = GetCharmer())
-    {
-        if (unit->GetTypeId() == TYPEID_PLAYER)
-        {
-            static_cast<Player*>(unit)->SetSwim(enable);
-            return;
-        }
-    }
-
     if (enable)
         m_movementInfo.AddMovementFlag(MOVEFLAG_SWIMMING);
     else
@@ -2659,15 +2816,6 @@ void Creature::SetSwim(bool enable)
 
 void Creature::SetCanFly(bool enable)
 {
-    if (Unit* unit = GetCharmer())
-    {
-        if (unit->GetTypeId() == TYPEID_PLAYER)
-        {
-            static_cast<Player*>(unit)->SetCanFly(enable);
-            return;
-        }
-    }
-
     if (enable)
         m_movementInfo.AddMovementFlag(MOVEFLAG_CAN_FLY);
     else
@@ -2680,15 +2828,6 @@ void Creature::SetCanFly(bool enable)
 
 void Creature::SetFeatherFall(bool enable)
 {
-    if (Unit* unit = GetCharmer())
-    {
-        if (unit->GetTypeId() == TYPEID_PLAYER)
-        {
-            static_cast<Player*>(unit)->SetFeatherFall(enable);
-            return;
-        }
-    }
-
     if (enable)
         m_movementInfo.AddMovementFlag(MOVEFLAG_SAFE_FALL);
     else
@@ -2701,15 +2840,6 @@ void Creature::SetFeatherFall(bool enable)
 
 void Creature::SetHover(bool enable)
 {
-    if (Unit* unit = GetCharmer())
-    {
-        if (unit->GetTypeId() == TYPEID_PLAYER)
-        {
-            static_cast<Player*>(unit)->SetHover(enable);
-            return;
-        }
-    }
-
     if (enable)
         m_movementInfo.AddMovementFlag(MOVEFLAG_HOVER);
     else
@@ -2722,17 +2852,11 @@ void Creature::SetHover(bool enable)
 
 void Creature::SetRoot(bool enable)
 {
-    if (Unit* unit = GetCharmer())
-    {
-        if (unit->GetTypeId() == TYPEID_PLAYER)
-        {
-            static_cast<Player*>(unit)->SetRoot(enable);
-            return;
-        }
-    }
-
     if (enable)
+    {
+        m_movementInfo.RemoveMovementFlag(movementFlagsMask);
         m_movementInfo.AddMovementFlag(MOVEFLAG_ROOT);
+    }
     else
         m_movementInfo.RemoveMovementFlag(MOVEFLAG_ROOT);
 
@@ -2743,15 +2867,6 @@ void Creature::SetRoot(bool enable)
 
 void Creature::SetWaterWalk(bool enable)
 {
-    if (Unit* unit = GetCharmer())
-    {
-        if (unit->GetTypeId() == TYPEID_PLAYER)
-        {
-            static_cast<Player*>(unit)->SetWaterWalk(enable);
-            return;
-        }
-    }
-
     if (enable)
         m_movementInfo.AddMovementFlag(MOVEFLAG_WATERWALKING);
     else

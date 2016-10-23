@@ -162,6 +162,8 @@ void instance_icecrown_citadel::OnCreatureCreate(Creature* pCreature)
         case NPC_BLOOD_ORB_CONTROL:
         case NPC_PUTRICIDES_TRAP:
         case NPC_GAS_STALKER:
+        case NPC_OOZE_TENTACLE_STALKER:
+        case NPC_SLIMY_TENTACLE_STALKER:
             m_mNpcEntryGuidStore[pCreature->GetEntry()] = pCreature->GetObjectGuid();
             break;
         case NPC_DEATHWHISPER_SPAWN_STALKER:
@@ -187,6 +189,17 @@ void instance_icecrown_citadel::OnCreatureCreate(Creature* pCreature)
                     m_sDarkfallenCreaturesLeftGuids.insert(pCreature->GetObjectGuid());
             }
             return;
+        case NPC_PUDDLE_STALKER:
+            // select Puddle Stalkers only from Rotface encounter, upper plan
+            if (pCreature->GetPositionX() > 4350.0f && pCreature->GetPositionZ() > 365.0f)
+                m_lRotfaceUpperStalkersGuids.push_back(pCreature->GetObjectGuid());
+            return;
+        case NPC_MAD_SCIENTIST_STALKER:
+            if (pCreature->GetPositionX() < 4350.0f)
+                m_leftScientistStalkerGuid = pCreature->GetObjectGuid();
+            else
+                m_rightScientistStalkerGuid = pCreature->GetObjectGuid();
+            return;
     }
 }
 
@@ -201,7 +214,13 @@ void instance_icecrown_citadel::OnObjectCreate(GameObject* pGo)
                 pGo->SetGoState(GO_STATE_ACTIVE);
             break;
         case GO_DEATHWHISPER_ELEVATOR:
-            // ToDo: set in motion when TYPE_LADY_DEATHWHISPER == DONE
+            if (m_auiEncounter[TYPE_LADY_DEATHWHISPER] == DONE)
+            {
+                pGo->SetRespawnTime(30);
+                pGo->Refresh();
+                pGo->SetUInt32Value(GAMEOBJECT_LEVEL, 0);
+                pGo->SetGoState(GO_STATE_READY);
+            }
             break;
         case GO_SAURFANG_DOOR:
             break;
@@ -299,6 +318,7 @@ void instance_icecrown_citadel::OnObjectCreate(GameObject* pGo)
         case GO_GREEN_PLAGUE:
         case GO_ORANGE_VALVE:
         case GO_GREEN_VALVE:
+        case GO_DRINK_ME:
             break;
         case GO_PLAGUE_SIGIL:
             if (m_auiEncounter[TYPE_PROFESSOR_PUTRICIDE] == DONE)
@@ -463,7 +483,12 @@ void instance_icecrown_citadel::SetData(uint32 uiType, uint32 uiData)
             DoUseDoorOrButton(GO_ORATORY_DOOR);
             if (uiData == DONE)
             {
-                // ToDo: set the elevateor in motion when TYPE_LADY_DEATHWHISPER == DONE
+                if (GameObject* pElevator = GetSingleGameObjectFromStorage(GO_DEATHWHISPER_ELEVATOR))
+                {
+                    DoRespawnGameObject(GO_DEATHWHISPER_ELEVATOR, 30);
+                    pElevator->SetUInt32Value(GAMEOBJECT_LEVEL, 0);
+                    pElevator->SetGoState(GO_STATE_READY);
+                }
 
                 // enable teleporter
                 DoToggleGameObjectFlags(GO_TRANSPORTER_RAMPART_SKULLS, GO_FLAG_NO_INTERACT, false);
@@ -529,6 +554,8 @@ void instance_icecrown_citadel::SetData(uint32 uiType, uint32 uiData)
             DoUseDoorOrButton(GO_GREEN_PLAGUE);
             if (uiData == DONE)
                 DoToggleGameObjectFlags(GO_GREEN_VALVE, GO_FLAG_NO_INTERACT, false);
+            else if (uiData == IN_PROGRESS)
+                SetSpecialAchievementCriteria(TYPE_ACHIEV_DANCES_OOZES, true);
             break;
         case TYPE_PROFESSOR_PUTRICIDE:
             m_auiEncounter[uiType] = uiData;
@@ -543,6 +570,10 @@ void instance_icecrown_citadel::SetData(uint32 uiType, uint32 uiData)
                         pTransporter->SetGoState(GO_STATE_ACTIVE);
                 }
             }
+            else if (uiData == FAIL)
+                DoToggleGameObjectFlags(GO_DRINK_ME, GO_FLAG_NO_INTERACT, false);
+            else if (uiData == IN_PROGRESS)
+                SetSpecialAchievementCriteria(TYPE_ACHIEV_NAUSEA, true);
             break;
         case TYPE_BLOOD_PRINCE_COUNCIL:
             m_auiEncounter[uiType] = uiData;
@@ -597,7 +628,7 @@ void instance_icecrown_citadel::SetData(uint32 uiType, uint32 uiData)
             DoUseDoorOrButton(GO_VALITHRIA_DOOR_1);
             DoUseDoorOrButton(GO_VALITHRIA_DOOR_2);
             // Some doors are used only in 25 man mode
-            if (instance->GetDifficulty() == RAID_DIFFICULTY_25MAN_NORMAL || instance->GetDifficulty() == RAID_DIFFICULTY_25MAN_HEROIC)
+            if (Is25ManDifficulty())
             {
                 DoUseDoorOrButton(GO_VALITHRIA_DOOR_3);
                 DoUseDoorOrButton(GO_VALITHRIA_DOOR_4);
@@ -721,6 +752,16 @@ bool instance_icecrown_citadel::CheckAchievementCriteriaMeet(uint32 uiCriteriaId
         case ACHIEV_CRIT_MADE_A_MESS_10H:
         case ACHIEV_CRIT_MADE_A_MESS_25H:
             return m_abAchievCriteria[TYPE_ACHIEV_MADE_A_MESS];
+        case ACHIEV_CRIT_DANCES_WITH_OOZES_10N:
+        case ACHIEV_CRIT_DANCES_WITH_OOZES_25N:
+        case ACHIEV_CRIT_DANCES_WITH_OOZES_10H:
+        case ACHIEV_CRIT_DANCES_WITH_OOZES_25H:
+            return m_abAchievCriteria[TYPE_ACHIEV_DANCES_OOZES];
+        case ACHIEV_CRIT_NAUSEA_10N:
+        case ACHIEV_CRIT_NAUSEA_25N:
+        case ACHIEV_CRIT_NAUSEA_10H:
+        case ACHIEV_CRIT_NAUSEA_25H:
+            return m_abAchievCriteria[TYPE_ACHIEV_NAUSEA];
     }
 
     return false;

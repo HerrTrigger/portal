@@ -38,7 +38,7 @@
 #include "Log.h"
 #include "Unit.h"
 #include "Creature.h"
-#include "CreatureAI.h"
+#include "AI/CreatureAI.h"
 #include "ObjectMgr.h"
 #include "SQLStorages.h"
 #include "movement/MoveSplineInit.h"
@@ -313,6 +313,9 @@ void VehicleInfo::UnBoard(Unit* passenger, bool changeVehicle)
 
     UnBoardPassenger(passenger);                            // Use TransportBase to remove the passenger from storage list
 
+    // Remove passenger modifications
+    RemoveSeatMods(passenger, seatEntry->m_flags);
+
     if (!changeVehicle)                                     // Send expected unboarding packages
     {
         // Update movementInfo
@@ -346,9 +349,6 @@ void VehicleInfo::UnBoard(Unit* passenger, bool changeVehicle)
             m_accessoryGuids.erase(passenger->GetObjectGuid());
         }
     }
-
-    // Remove passenger modifications
-    RemoveSeatMods(passenger, seatEntry->m_flags);
 
     // Some creature vehicles get despawned after passenger unboarding
     if (m_owner->GetTypeId() == TYPEID_UNIT)
@@ -619,7 +619,8 @@ void VehicleInfo::RemoveSeatMods(Unit* passenger, uint32 seatFlags)
         }
 
         // Reinitialize movement
-        ((Creature*)passenger)->AI()->SetCombatMovement(true, true);
+        if (((Creature*)passenger)->AI())
+            ((Creature*)passenger)->AI()->SetCombatMovement(true, true);
         if (!passenger->getVictim())
             passenger->GetMotionMaster()->Initialize();
     }
